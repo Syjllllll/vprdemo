@@ -39,12 +39,32 @@
     .btn { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
     .btn-primary { background: #1890ff; color: #fff; }
     .btn-primary:hover { background: #40a9ff; }
+    .btn-success { background: #52c41a; color: #fff; }
+    .btn-success:hover { background: #73d13d; }
+    .btn-danger { background: #f5222d; color: #fff; }
+    .btn-danger:hover { background: #ff4d4f; }
+    .btn-warning { background: #faad14; color: #fff; }
+    .btn-warning:hover { background: #ffc53d; }
     .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .form-group { margin-bottom: 10px; }
     .form-group label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
-    .form-group input { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+    .form-group input, .form-group select { width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
     .actions { margin: 12px; }
     .empty { text-align: center; color: #bbb; padding: 40px 0; }
+    /* Sim panel */
+    .sim-status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; margin-bottom: 12px; }
+    .sim-status.stopped { background: #fff7e6; border-color: #ffd591; }
+    .sim-dot { width: 8px; height: 8px; border-radius: 50%; background: #52c41a; animation: blink 1.2s infinite; }
+    .sim-dot.off { background: #aaa; animation: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .sim-controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .sim-log { background: #1a1a2e; border-radius: 6px; padding: 8px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 11px; }
+    .log-info { color: #9cdcfe; }
+    .log-success { color: #4ec9b0; }
+    .log-warn { color: #dcdcaa; }
+    .log-error { color: #f44747; }
+    .sim-section { font-size: 12px; font-weight: 600; color: #555; margin: 10px 0 6px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
   </style>
 </head>
 <body>
@@ -63,6 +83,7 @@
         <div class="tab active" data-panel="vehicles">车辆</div>
         <div class="tab" data-panel="orders">订单</div>
         <div class="tab" data-panel="create-order">新建订单</div>
+        <div class="tab" data-panel="simulator">模拟测试</div>
       </div>
 
       <div id="vehicles" class="panel active">
@@ -82,6 +103,51 @@
         <div class="form-group"><label>送达经度</label><input id="dropoff-lng" type="number" step="0.0001" value="116.4174"></div>
         <div class="actions">
           <button class="btn btn-primary" onclick="createOrder()">创建订单</button>
+        </div>
+      </div>
+
+      <!-- 模拟测试面板 -->
+      <div id="simulator" class="panel">
+        <!-- 状态栏 -->
+        <div id="sim-status-bar" class="sim-status stopped">
+          <div id="sim-dot" class="sim-dot off"></div>
+          <span id="sim-status-text" style="font-size:13px;font-weight:600;">模拟器未启动</span>
+          <span id="sim-vehicle-count" style="font-size:12px;color:#888;margin-left:auto;"></span>
+        </div>
+
+        <!-- 启动控制 -->
+        <div class="sim-section">🚗 车辆控制</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+          <select id="sim-count" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="3">3 辆</option>
+            <option value="5" selected>5 辆</option>
+            <option value="8">8 辆</option>
+            <option value="10">10 辆</option>
+            <option value="15">15 辆</option>
+          </select>
+          <button id="btn-start" class="btn btn-success" onclick="simStart()">▶ 启动</button>
+          <button id="btn-stop" class="btn btn-danger" onclick="simStop()" disabled>■ 停止</button>
+        </div>
+
+        <!-- 订单测试 -->
+        <div class="sim-section">📦 订单测试</div>
+        <div class="sim-controls">
+          <button class="btn btn-primary btn-sm" onclick="simCreateOrder()">随机订单 × 1</button>
+          <button class="btn btn-primary btn-sm" onclick="simBatch(3)">批量下单 × 3</button>
+          <button class="btn btn-primary btn-sm" onclick="simBatch(5)">批量下单 × 5</button>
+          <button class="btn btn-warning btn-sm" onclick="simBatch(10)">压力测试 × 10</button>
+        </div>
+
+        <!-- 日志 -->
+        <div class="sim-section">📋 实时日志</div>
+        <div id="sim-log" class="sim-log">
+          <div class="log-info">等待模拟器启动...</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:6px;">
+          <button class="btn btn-sm" style="background:#eee;" onclick="document.getElementById('sim-log').innerHTML=''">清空日志</button>
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="auto-scroll" checked> 自动滚动
+          </label>
         </div>
       </div>
     </div>
@@ -196,10 +262,127 @@
       } catch(e) { alert('调度失败: ' + e.message); }
     }
 
+    // ===== 模拟器 =====
+    let simLogCache = [];
+    let simRunning = false;
+
+    function appendLog(entries) {
+      const el = document.getElementById('sim-log');
+      if (!el) return;
+      entries.forEach(e => {
+        const div = document.createElement('div');
+        div.className = 'log-' + (e.level || 'info');
+        div.textContent = `[${e.time}] ${e.message}`;
+        el.appendChild(div);
+      });
+      if (document.getElementById('auto-scroll')?.checked) {
+        el.scrollTop = el.scrollHeight;
+      }
+      // 限制 DOM 节点数量
+      while (el.children.length > 300) el.removeChild(el.firstChild);
+    }
+
+    function updateSimUI(status) {
+      simRunning = status.running;
+      const bar = document.getElementById('sim-status-bar');
+      const dot = document.getElementById('sim-dot');
+      const txt = document.getElementById('sim-status-text');
+      const cnt = document.getElementById('sim-vehicle-count');
+      const btnStart = document.getElementById('btn-start');
+      const btnStop = document.getElementById('btn-stop');
+
+      if (status.running) {
+        bar.className = 'sim-status';
+        dot.className = 'sim-dot';
+        txt.textContent = '模拟器运行中';
+        cnt.textContent = `${status.vehicle_ids?.length || 0} 辆在线`;
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+      } else {
+        bar.className = 'sim-status stopped';
+        dot.className = 'sim-dot off';
+        txt.textContent = '模拟器未启动';
+        cnt.textContent = '';
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+      }
+    }
+
+    async function simStart() {
+      const count = parseInt(document.getElementById('sim-count').value);
+      try {
+        document.getElementById('btn-start').disabled = true;
+        const res = await fetchJSON(API + '/sim/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count }),
+        });
+        if (res.error) { alert('启动失败: ' + res.error); document.getElementById('btn-start').disabled = false; return; }
+        appendLog([{ time: new Date().toLocaleTimeString('zh-CN',{hour12:false}), level:'success', message:`✅ 模拟器已启动，${count} 辆车辆上线` }]);
+        pollSimStatus();
+      } catch(e) { alert('启动失败: ' + e.message); document.getElementById('btn-start').disabled = false; }
+    }
+
+    async function simStop() {
+      try {
+        await fetchJSON(API + '/sim/stop', { method: 'POST' });
+        appendLog([{ time: new Date().toLocaleTimeString('zh-CN',{hour12:false}), level:'warn', message:'■ 模拟器已停止' }]);
+        updateSimUI({ running: false });
+      } catch(e) { alert('停止失败: ' + e.message); }
+    }
+
+    async function simCreateOrder() {
+      try {
+        const res = await fetchJSON(API + '/sim/order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto_dispatch: true }),
+        });
+        const o = res.order;
+        appendLog([{ time: new Date().toLocaleTimeString('zh-CN',{hour12:false}), level: res.dispatch==='ok'?'success':'warn',
+          message: `📦 新订单: ${o?.pickup_addr} → ${o?.dropoff_addr} | 调度: ${res.dispatch}` }]);
+        loadOrders(); loadVehicles();
+      } catch(e) { alert('创建失败: ' + e.message); }
+    }
+
+    async function simBatch(n) {
+      try {
+        const res = await fetchJSON(API + '/sim/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ count: n, auto_dispatch: true }),
+        });
+        const entries = (res.results || []).map(r => ({
+          time: new Date().toLocaleTimeString('zh-CN',{hour12:false}),
+          level: r.dispatch==='ok' ? 'success' : (r.error ? 'error' : 'warn'),
+          message: r.error ? `❌ 创建失败: ${r.error}` : `📦 ${r.pickup} → ${r.dropoff} | ${r.dispatch}`,
+        }));
+        appendLog(entries);
+        loadOrders(); loadVehicles();
+      } catch(e) { alert('批量失败: ' + e.message); }
+    }
+
+    // 轮询模拟器状态（含日志同步）
+    let simLastLogLen = 0;
+    async function pollSimStatus() {
+      try {
+        const status = await fetchJSON(API + '/sim/status');
+        updateSimUI(status);
+        // 追加新日志
+        if (status.logs && status.logs.length > simLastLogLen) {
+          appendLog(status.logs.slice(simLastLogLen));
+          simLastLogLen = status.logs.length;
+        }
+      } catch(e) { /* 忽略 */ }
+    }
+
     // Poll every 5s
     function poll() { loadVehicles(); loadOrders(); }
     poll();
     setInterval(poll, 5000);
+    // 模拟器状态轮询
+    pollSimStatus();
+    setInterval(pollSimStatus, 3000);
   </script>
 </body>
 </html>

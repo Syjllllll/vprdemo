@@ -13,6 +13,7 @@ import (
 	"github.com/vprdemo/fleet-dispatch/internal/dispatch"
 	"github.com/vprdemo/fleet-dispatch/internal/mqtt"
 	"github.com/vprdemo/fleet-dispatch/internal/order"
+	"github.com/vprdemo/fleet-dispatch/internal/simulation"
 	"github.com/vprdemo/fleet-dispatch/internal/store"
 	"github.com/vprdemo/fleet-dispatch/internal/vehicle"
 )
@@ -55,8 +56,11 @@ func main() {
 	// Dispatch engine
 	dispatcher := dispatch.NewEngine(vehicleSvc, orderSvc, redis, mqttHandler)
 
+	// Simulator manager (in-process)
+	simMgr := simulation.NewManager(vehicleSvc, orderSvc, cfg.MQTTBroker)
+
 	// HTTP server
-	router := api.NewRouter(vehicleSvc, orderSvc, dispatcher)
+	router := api.NewRouter(vehicleSvc, orderSvc, dispatcher, simMgr)
 	addr := fmt.Sprintf(":%d", cfg.HTTPPort)
 	server := &http.Server{Addr: addr, Handler: router}
 
@@ -72,5 +76,6 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("shutting down...")
+	simMgr.Stop()
 	server.Close()
 }

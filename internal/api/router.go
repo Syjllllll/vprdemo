@@ -8,6 +8,7 @@ import (
 	"github.com/vprdemo/fleet-dispatch/internal/dispatch"
 	"github.com/vprdemo/fleet-dispatch/internal/model"
 	"github.com/vprdemo/fleet-dispatch/internal/order"
+	"github.com/vprdemo/fleet-dispatch/internal/simulation"
 	"github.com/vprdemo/fleet-dispatch/internal/vehicle"
 )
 
@@ -16,14 +17,16 @@ type Router struct {
 	vehicleSvc *vehicle.Service
 	orderSvc   *order.Service
 	dispatcher *dispatch.Engine
+	simMgr     *simulation.Manager
 }
 
-func NewRouter(vs *vehicle.Service, os *order.Service, d *dispatch.Engine) *Router {
+func NewRouter(vs *vehicle.Service, os *order.Service, d *dispatch.Engine, sim *simulation.Manager) *Router {
 	r := &Router{
 		mux:        http.NewServeMux(),
 		vehicleSvc: vs,
 		orderSvc:   os,
 		dispatcher: d,
+		simMgr:     sim,
 	}
 	r.routes()
 	return r
@@ -53,6 +56,13 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("POST /api/orders", r.createOrder)
 	r.mux.HandleFunc("POST /api/orders/{id}/dispatch", r.dispatchOrder)
 	r.mux.HandleFunc("PUT /api/orders/{id}/status", r.updateOrderStatus)
+
+	// Simulation endpoints
+	r.mux.HandleFunc("POST /api/sim/start", r.simStart)
+	r.mux.HandleFunc("POST /api/sim/stop", r.simStop)
+	r.mux.HandleFunc("GET /api/sim/status", r.simStatus)
+	r.mux.HandleFunc("POST /api/sim/order", r.simCreateOrder)
+	r.mux.HandleFunc("POST /api/sim/batch", r.simBatch)
 
 	// Health
 	r.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -184,4 +194,99 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 		msg = err.Error()
 	}
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// --- Simulation handlers ---
+
+func (r *Router) simStart(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		Count int `json:"count"`
+	}
+	body.Count = 5 // 默认值
+	json.NewDecoder(req.Body).Decode(&body)
+	if body.Count < 1 {
+		body.Count = 1
+	}
+	if body.Count > 20 {
+		body.Count = 20
+	}
+	if err := r.simMgr.Start(req.Context(), body.Count); err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"message": "started", "count": body.Count})
+}
+
+func (r *Router) simStop(w http.ResponseWriter, req *http.Request) {
+	r.simMgr.Stop()
+	writeJSON(w, http.StatusOK, map[string]string{"message": "stopped"})
+}
+
+func (r *Router) simStatus(w http.ResponseWriter, req *http.Request) {
+	writeJSON(w, http.StatusOK, r.simMgr.GetStatus())
+}
+
+func (r *Router) simCreateOrder(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		AutoDispatch bool `json:"auto_dispatch"`
+	}
+	body.AutoDispatch = true
+	json.NewDecoder(req.Body).Decode(&body)
+
+	o, err := r.simMgr.CreateRandomOrder(req.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if body.AutoDispatch {
+		// 调度
+		if err := r.dispatcher.DispatchOrder(req.Context(), o.ID); err != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"order": o, "dispatch": "failed: " + err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"order": o, "dispatch": "ok"})
+}
+
+func (r *Router) simBatch(w http.ResponseWriter, req *http.Request) {
+	var body struct {
+		Count        int  `json:"count"`
+		AutoDispatch bool `json:"auto_dispatch"`
+	}
+	body.Count = 3
+	body.AutoDispatch = true
+	json.NewDecoder(req.Body).Decode(&body)
+	if body.Count < 1 {
+		body.Count = 1
+	}
+	if body.Count > 20 {
+		body.Count = 20
+	}
+
+	results := make([]map[string]interface{}, 0, body.Count)
+	for i := 0; i < body.Count; i++ {
+		o, err := r.simMgr.CreateRandomOrder(req.Context())
+		if err != nil {
+			results = append(results, map[string]interface{}{"error": err.Error()})
+			continue
+		}
+		dispatchResult := "skipped"
+		if body.AutoDispatch {
+			if err := r.dispatcher.DispatchOrder(req.Context(), o.ID); err != nil {
+				dispatchResult = "failed: " + err.Error()
+			} else {
+				dispatchResult = "ok"
+			}
+		}
+		results = append(results, map[string]interface{}{
+			"order_id":    o.ID,
+			"pickup":      o.PickupAddr,
+			"dropoff":     o.DropoffAddr,
+			"dispatch":    dispatchResult,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results, "total": len(results)})
 }
