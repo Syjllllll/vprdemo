@@ -1,0 +1,57 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: fleet_dispatch
+      REDIS_ADDR: redis:6379
+      MQTT_BROKER: tcp://emqx:1883
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fleet_dispatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  emqx:
+    image: emqx/emqx:5.6
+    ports:
+      - "1884:1883"    # MQTT
+      - "8084:8083"    # WebSocket
+      - "18083:18083"  # Dashboard
+    environment:
+      EMQX_NAME: fleet-emqx
+
+volumes:
+  pgdata:
