@@ -134,12 +134,24 @@ func (m *Manager) Start(ctx context.Context, count int) error {
 		lat := 39.9042 + (rand.Float64()-0.5)*0.04
 		lng := 116.4074 + (rand.Float64()-0.5)*0.04
 
+		battery := 60 + rand.Float64()*40
+
+		// 直接写入遥测数据，同步将状态置为 idle（避免依赖 MQTT 异步更新）
+		_ = m.vehicleSvc.UpdateTelemetry(ctx, &model.VehicleTelemetry{
+			VehicleID: vid,
+			Latitude:  lat,
+			Longitude: lng,
+			Battery:   battery,
+			Speed:     0,
+			Timestamp: time.Now().Unix(),
+		})
+
 		vs := &vehicleState{
 			id:      vid,
 			name:    vname,
 			lat:     lat,
 			lng:     lng,
-			battery: 60 + rand.Float64()*40,
+			battery: battery,
 			status:  "idle",
 		}
 
