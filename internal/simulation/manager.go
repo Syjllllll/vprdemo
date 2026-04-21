@@ -52,6 +52,12 @@ type Status struct {
 	Logs       []LogEntry `json:"logs"`
 }
 
+// ScenarioConfig 全流程测试配置
+type ScenarioConfig struct {
+	VehicleCount int `json:"vehicle_count"`
+	OrderCount   int `json:"order_count"`
+}
+
 // vehicleState 单辆模拟车辆的内部状态
 type vehicleState struct {
 	id         string
@@ -211,6 +217,118 @@ func (m *Manager) GetStatus() Status {
 		Running:    m.running,
 		VehicleIDs: ids,
 		Logs:       logs,
+	}
+}
+
+// RunScenario 执行全流程模拟测试（在后台 goroutine 中运行）
+// 流程: 启动车辆 → 等待就绪 → 批量创建订单 → 逐一调度 → 监控完成
+func (m *Manager) RunScenario(cfg ScenarioConfig, dispatcher func(ctx context.Context, orderID string) error) {
+	ctx := context.Background()
+
+	m.addLog("info", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	m.addLog("info", fmt.Sprintf("🚀 全流程测试启动 | 车辆: %d | 订单: %d", cfg.VehicleCount, cfg.OrderCount))
+	m.addLog("info", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// Phase 1: 启动车辆（若尚未运行）
+	m.addLog("info", "【阶段 1/3】启动模拟车辆...")
+	m.mu.Lock()
+	alreadyRunning := m.running
+	m.mu.Unlock()
+
+	if !alreadyRunning {
+		if err := m.Start(ctx, cfg.VehicleCount); err != nil {
+			m.addLog("error", fmt.Sprintf("车辆启动失败: %v", err))
+			return
+		}
+	} else {
+		m.addLog("info", fmt.Sprintf("模拟器已运行中（%d 辆），跳过启动", len(m.vehicles)))
+	}
+
+	// 等待遥测写入稳定
+	time.Sleep(800 * time.Millisecond)
+	m.addLog("success", "✅ 车辆就绪，状态已同步为 idle")
+
+	// Phase 2: 批量创建订单
+	m.addLog("info", fmt.Sprintf("【阶段 2/3】创建 %d 个配送订单...", cfg.OrderCount))
+	orders := make([]*model.Order, 0, cfg.OrderCount)
+	for i := 0; i < cfg.OrderCount; i++ {
+		o, err := m.CreateRandomOrder(ctx)
+		if err != nil {
+			m.addLog("error", fmt.Sprintf("  #%d 创建失败: %v", i+1, err))
+			continue
+		}
+		orders = append(orders, o)
+		// 小间隔避免写入冲突
+		time.Sleep(50 * time.Millisecond)
+	}
+	m.addLog("success", fmt.Sprintf("✅ 成功创建 %d/%d 个订单", len(orders), cfg.OrderCount))
+
+	// Phase 3: 逐一调度
+	m.addLog("info", fmt.Sprintf("【阶段 3/3】调度 %d 个订单...", len(orders)))
+	successCount := 0
+	for i, o := range orders {
+		if err := dispatcher(ctx, o.ID); err != nil {
+			m.addLog("warn", fmt.Sprintf("  #%d %s→%s 调度失败: %v", i+1, o.PickupAddr, o.DropoffAddr, err))
+		} else {
+			m.addLog("success", fmt.Sprintf("  #%d 📦 %s → %s 已派车", i+1, o.PickupAddr, o.DropoffAddr))
+			successCount++
+		}
+		time.Sleep(200 * time.Millisecond) // 错开调度避免竞争同一辆车
+	}
+
+	m.addLog("info", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	m.addLog("success", fmt.Sprintf("🎯 调度完成: %d/%d 个订单成功派车，等待车辆执行...", successCount, len(orders)))
+	m.addLog("info", "  车辆将自动: 前往取货 → 确认取货 → 前往送达点 → 完成配送")
+	m.addLog("info", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// 监控阶段：每 10 秒汇报一次进度（最多等 5 分钟）
+	go m.monitorCompletion(ctx, orders)
+}
+
+// monitorCompletion 定时汇报订单完成情况
+func (m *Manager) monitorCompletion(ctx context.Context, orders []*model.Order) {
+	orderIDs := make([]string, len(orders))
+	for i, o := range orders {
+		orderIDs[i] = o.ID
+	}
+
+	deadline := time.Now().Add(5 * time.Minute)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			delivered, inProgress, pending, failed := 0, 0, 0, 0
+			for _, id := range orderIDs {
+				o, err := m.orderSvc.Get(ctx, id)
+				if err != nil {
+					continue
+				}
+				switch o.Status {
+				case "delivered":
+					delivered++
+				case "picked_up", "assigned":
+					inProgress++
+				case "pending":
+					pending++
+				case "failed", "cancelled":
+					failed++
+				}
+			}
+			total := len(orderIDs)
+			m.addLog("info", fmt.Sprintf("📊 进度 | ✅已送达:%d  🚗配送中:%d  ⏳待处理:%d  ❌失败:%d  共%d单",
+				delivered, inProgress, pending, failed, total))
+
+			if delivered+failed == total {
+				m.addLog("success", fmt.Sprintf("🏁 全流程完成！%d 单已送达，%d 单失败", delivered, failed))
+				return
+			}
+			if time.Now().After(deadline) {
+				m.addLog("warn", "⏰ 监控超时（5分钟），部分订单可能仍在配送中")
+				return
+			}
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -63,6 +64,7 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("GET /api/sim/status", r.simStatus)
 	r.mux.HandleFunc("POST /api/sim/order", r.simCreateOrder)
 	r.mux.HandleFunc("POST /api/sim/batch", r.simBatch)
+	r.mux.HandleFunc("POST /api/sim/scenario", r.simScenario)
 
 	// Health
 	r.mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -289,4 +291,30 @@ func (r *Router) simBatch(w http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results, "total": len(results)})
+}
+
+func (r *Router) simScenario(w http.ResponseWriter, req *http.Request) {
+	var cfg simulation.ScenarioConfig
+	cfg.VehicleCount = 5
+	cfg.OrderCount = 3
+	json.NewDecoder(req.Body).Decode(&cfg)
+	if cfg.VehicleCount < 1 {
+		cfg.VehicleCount = 1
+	}
+	if cfg.VehicleCount > 20 {
+		cfg.VehicleCount = 20
+	}
+	if cfg.OrderCount < 1 {
+		cfg.OrderCount = 1
+	}
+	if cfg.OrderCount > 20 {
+		cfg.OrderCount = 20
+	}
+
+	// 在后台运行，立即返回
+	go r.simMgr.RunScenario(cfg, func(ctx context.Context, orderID string) error {
+		return r.dispatcher.DispatchOrder(ctx, orderID)
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "scenario started", "hint": "watch logs via GET /api/sim/status"})
 }

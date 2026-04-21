@@ -138,6 +138,35 @@
           <button class="btn btn-warning btn-sm" onclick="simBatch(10)">压力测试 × 10</button>
         </div>
 
+        <!-- 全流程测试 -->
+        <div class="sim-section">🚀 全流程测试</div>
+        <div style="background:#f0f7ff;border:1px solid #91caff;border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="font-size:12px;color:#444;margin-bottom:10px;line-height:1.7;">
+            一键执行完整配送流程：<br>
+            <b>启动车辆</b> → <b>创建订单</b> → <b>自动调度</b> → <b>取货</b> → <b>配送完成</b>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <label style="font-size:12px;">车辆数</label>
+            <select id="sc-vehicles" style="width:70px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+              <option value="3">3</option>
+              <option value="5" selected>5</option>
+              <option value="8">8</option>
+              <option value="10">10</option>
+            </select>
+            <label style="font-size:12px;">订单数</label>
+            <select id="sc-orders" style="width:70px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="8">8</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+          <button id="btn-scenario" class="btn btn-primary" style="width:100%;font-size:14px;padding:8px;" onclick="runScenario()">
+            🚀 启动全流程测试
+          </button>
+        </div>
+
         <!-- 日志 -->
         <div class="sim-section">📋 实时日志</div>
         <div id="sim-log" class="sim-log">
@@ -360,6 +389,31 @@
         appendLog(entries);
         loadOrders(); loadVehicles();
       } catch(e) { alert('批量失败: ' + e.message); }
+    }
+
+    async function runScenario() {
+      const vehicleCount = parseInt(document.getElementById('sc-vehicles').value);
+      const orderCount = parseInt(document.getElementById('sc-orders').value);
+      const btn = document.getElementById('btn-scenario');
+      btn.disabled = true;
+      btn.textContent = '⏳ 测试运行中...';
+      try {
+        await fetchJSON(API + '/sim/scenario', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vehicle_count: vehicleCount, order_count: orderCount }),
+        });
+        appendLog([{ time: new Date().toLocaleTimeString('zh-CN',{hour12:false}), level:'info',
+          message:`🚀 全流程测试已启动（${vehicleCount}辆车/${orderCount}单），请观察日志...` }]);
+        // 切换到模拟测试 tab 并开始滚动日志
+        document.getElementById('auto-scroll').checked = true;
+        // 60秒后自动恢复按钮
+        setTimeout(() => { btn.disabled = false; btn.textContent = '🚀 启动全流程测试'; }, 60000);
+      } catch(e) {
+        alert('启动失败: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = '🚀 启动全流程测试';
+      }
     }
 
     // 轮询模拟器状态（含日志同步）
